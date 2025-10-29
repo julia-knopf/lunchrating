@@ -1,8 +1,9 @@
-import { useState } from 'react';
-import { UtensilsCrossed, BarChart3, ArrowLeft } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { UtensilsCrossed, BarChart3, ArrowLeft, Loader2 } from 'lucide-react';
 import { RatingForm, Rating } from './components/RatingForm';
 import { RatingsOverview } from './components/RatingsOverview';
 import { ImageWithFallback } from './components/figma/ImageWithFallback';
+import { supabase } from './utils/supabase/client';
 
 const weekdays = [
   { key: 'montag', label: 'Montag' },
@@ -16,14 +17,83 @@ export default function App() {
   const [selectedDay, setSelectedDay] = useState('montag');
   const [ratings, setRatings] = useState<Rating[]>([]);
   const [view, setView] = useState<'form' | 'overview'>('form');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmitRating = (rating: Rating) => {
-    setRatings((prev) => [...prev, rating]);
-    setView('overview');
+  // Load ratings from database on mount
+  useEffect(() => {
+    loadRatings();
+  }, []);
+
+  const loadRatings = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const { data, error: fetchError } = await supabase
+        .from('ratings')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (fetchError) throw fetchError;
+
+      // Transform database format to app format
+      const transformedRatings: Rating[] = (data || []).map((row) => ({
+        day: row.day,
+        date: row.date,
+        categories: {
+          vegan: row.vegan,
+          vegetarian: row.vegetarian,
+          meatFish: row.meat_fish,
+          salad: row.salad,
+          dessert: row.dessert,
+        },
+        comment: row.comment,
+      }));
+
+      setRatings(transformedRatings);
+    } catch (err) {
+      console.error('Error loading ratings:', err);
+      setError('Bewertungen konnten nicht geladen werden');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmitRating = async (rating: Rating) => {
+    try {
+      setSubmitting(true);
+      setError(null);
+
+      // Save to database
+      const { error: insertError } = await supabase.from('ratings').insert({
+        day: rating.day,
+        date: rating.date,
+        vegan: rating.categories.vegan,
+        vegetarian: rating.categories.vegetarian,
+        meat_fish: rating.categories.meatFish,
+        salad: rating.categories.salad,
+        dessert: rating.categories.dessert,
+        comment: rating.comment,
+      });
+
+      if (insertError) throw insertError;
+
+      // Add to local state
+      setRatings((prev) => [rating, ...prev]);
+      setView('overview');
+    } catch (err) {
+      console.error('Error saving rating:', err);
+      setError('Bewertung konnte nicht gespeichert werden. Bitte versuche es erneut.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleBackToForm = () => {
     setView('form');
+    setError(null);
   };
 
   return (
@@ -49,7 +119,21 @@ export default function App() {
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-12">
-        {view === 'form' ? (
+        {/* Error Message */}
+        {error && (
+          <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+            <span className="text-red-600">⚠️</span>
+            <p className="text-red-700">{error}</p>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-12 h-12 text-orange-500 animate-spin mb-4" />
+            <p className="text-gray-600">Lade Bewertungen...</p>
+          </div>
+        ) : view === 'form' ? (
           <>
             {/* Day Selector */}
             <div className="mb-8">
@@ -76,10 +160,19 @@ export default function App() {
             </div>
 
             {/* Rating Form */}
-            <RatingForm
-              selectedDay={weekdays.find((d) => d.key === selectedDay)?.label || ''}
-              onSubmit={handleSubmitRating}
-            />
+            <div className={submitting ? 'opacity-50 pointer-events-none' : ''}>
+              <RatingForm
+                selectedDay={weekdays.find((d) => d.key === selectedDay)?.label || ''}
+                onSubmit={handleSubmitRating}
+              />
+            </div>
+
+            {submitting && (
+              <div className="mt-4 flex items-center justify-center gap-2 text-orange-600">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Speichere Bewertung...</span>
+              </div>
+            )}
 
             {/* View Statistics Button */}
             {ratings.length > 0 && (
